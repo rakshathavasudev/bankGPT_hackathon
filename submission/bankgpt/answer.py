@@ -96,6 +96,11 @@ class Answerer:
             "super": ("max" if re.search(r"\b(highest|best|top|maximum|most)\b", ql) else
                       "min" if re.search(r"\b(lowest|minimum|cheapest|least)\b", ql) else ""),
             "business": "business" in ql, "jumbo": "jumbo" in ql,
+            "service": (lambda m: m.group(1) if m else "")(re.search(
+                r"\bhow (?:can|do|would|should) i (?:update|change|correct|edit)\b.*?\bmy ((?:contact|mailing|home|email|e-mail)"
+                r"(?: information| address)?|address|phone number|phone|email address|name)\b", ql)),
+            "join": bool(re.search(r"\beligib|\bwho can (?:join|become)|\bbecome a (?:dupaco )?member|\bqualify for membership", ql)),
+            "ask_pct": re.findall(r"(\d+(?:\.\d+)?)\s?%", ql) if re.match(r"(?:do|does|is|are|can) ", ql) else [],
             "ira": bool(re.search(r"\b(ira|iras|roth|traditional|retirement)\b", ql)),
             "refi": bool(re.search(r"refinanc", ql)),
             "kind": ("routing" if "routing" in ql else
@@ -174,6 +179,11 @@ class Answerer:
         s *= 0.3 + 0.7 * cov
         if a["names"] and not self._has_names(a, u.uid):
             s *= 0.1
+        if a["join"]:
+            if re.search(r"eligib|who can join", u.context.lower()):
+                s *= 3.0
+            elif "/join" in u.url:
+                s *= 1.3
         if a["kind"] == "address" and re.search(r"\b(dupaco|branch)\b", tl):
             s *= 2.5
         return s
@@ -332,6 +342,23 @@ class Answerer:
 
     def _answer(self, a: dict, view: int):
         st = self.s
+        if a["service"]:
+            res = self._service_answer(a, view)
+            if res:
+                return res
+        if a["ask_pct"] and a["rate"]:
+            # "Do any savings tiers pay 0.35%?": look the product up without the number (which would pull in
+            # whatever other product happens to pay it), then say whether that rate is on its sheet.
+            nums = set(a["ask_pct"])
+            b = dict(a, ask_pct=[], toks=[t for t in a["toks"] if t not in nums],
+                     qt={k: v for k, v in a["qt"].items() if k not in nums}, list=True)
+            text, srcs, conf, note = self._answer(b, view)
+            if not conf:
+                return text, srcs, conf, note
+            found = any(re.search(rf"(?<![\d.]){re.escape(n)}0*\s?%", text) for n in nums)
+            lead = ("Yes. " if found else
+                    f"No. None of the listed tiers pays {', '.join(n + '%' for n in sorted(nums))}. ")
+            return lead + text, srcs, conf, note
         missing = [t for t in set(a["toks"]) if t not in GENERIC and not re.fullmatch(r"[\d.]+", t) and t not in st.post]
         missing_names = [n for n in a["names"] if n not in st.post and not any(x in st.post for x in SYNONYMS.get(n, []))]
         if missing_names or missing:
@@ -457,7 +484,29 @@ class Answerer:
                     if extra not in text and text not in extra:
                         text = text + " " + extra
                     break
+        if re.search(r"\b(charter|service|field of membership) area\b", text, re.I):
+            where = self._service_area(view)
+            if where and where[0] not in text:
+                text += " " + where[0]
+                srcs.append(where[1])
         return text, srcs + [type(u0)(0, url, "text", "", "") for url in g0["urls"] if url != u0.url][:2]
+
+    def _service_area(self, view):
+        """The site's own one-line statement of where Dupaco operates ('You can find us in A, B and C.')."""
+        st = self.s
+        bit = 1 << view
+        best = {}
+        for uid in st.post.get("find", {}):
+            u = st.units[uid]
+            if not st.unit_views[uid] & bit:
+                continue
+            for m in re.finditer(r"[^.]*\bfind us in [A-Z][a-z]+(?:, [A-Z][a-z]+)* and [A-Z][a-z]+\.", u.text):
+                sent = m.group(0).strip()
+                best.setdefault(sent, [0, u])[0] += 1
+        if not best:
+            return None
+        sent = max(best, key=lambda k: best[k][0])
+        return sent, best[sent][1]
 
     def _table_rows(self, table: str, view: int) -> list[Unit]:
         bit = 1 << view
@@ -549,23 +598,22 @@ class Answerer:
 
     def _phone_answer(self, a, view):
         """General 'what's your number' questions: the number the site repeats most is the main line."""
-        st = self.s
         spec = {t for t in a["toks"] if t not in GENERIC} - {"phone", "number", "call", "contact", "telephone", "reach"}
         if spec:
             return None
-        bit = 1 << view
-        freq, where = {}, {}
-        for uid, u in enumerate(st.units):
-            if not st.unit_views[uid] & bit or u.kind != "text":
-                continue
-            for m in re.findall(r"\b\d{3}-\d{3}-\d{4}\b", u.text):
-                freq[m] = freq.get(m, 0) + 1
-                if m not in where or "contact" in u.url:
-                    where[m] = u
-        if not freq:
+        num, u = self.main_phone(view)
+        if not num:
             return None
-        num = max(freq, key=freq.get)
-        return f"You can reach Dupaco at {num}.", [where[num]], True, None
+        return f"You can reach Dupaco at {num}.", [u], True, None
+
+    def _service_answer(self, a, view):
+        """'How do I update my address / phone / email': members do this in Shine or by calling."""
+        num, u = self.main_phone(view)
+        if not num:
+            return None
+        what = a["service"]
+        return (f"You can update your {what} by logging in to Shine Online or Mobile Banking and using the "
+                f"\"Contact Us\" tab, or by calling Dupaco at {num}.", [u], True, None)
 
     def _count_answer(self, a, groups, view):
         """'How many X': find '<number> ... X' statements about Dupaco itself; trust the newest dated one."""
