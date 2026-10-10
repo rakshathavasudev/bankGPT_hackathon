@@ -44,7 +44,7 @@ You can run any of them by passing `--eval`.
 
 | Set | Score (dev sets use an unweighted mean) |
 |---|---|
-| public_eval (40), official scorer | 0.813 final (accuracy 0.813, speed 1.0, p95 0.06 s) |
+| public_eval (40), official scorer | 0.946 final (accuracy 0.946, consistency 1.0, speed 1.0, p95 0.08 s) |
 | dev_eval (40) | 0.975 |
 | para_eval (45) | 1.0 |
 | refuse_eval (16) | 0.875 |
@@ -86,10 +86,18 @@ You can run any of them by passing `--eval`.
    - branch hours, picking the right schedule;
    - counts, from the newest dated "Dupaco has N branches" statement;
    - phone and routing numbers;
-   - "what link should I use" questions;
+   - "what link should I use" / "where do I see X rates" questions, preferring the product page's own rates section;
+   - "how do I update my address/phone/email" questions (Shine or the main phone line);
+   - "does any tier pay X%" questions, answered yes or no against the product's rate sheet;
+   - membership eligibility, with the site's own statement of where Dupaco operates;
    - highest/lowest questions;
    - "list all the rates" questions.
 8. **Stay consistent.** Answers are cached by the question's sorted word set plus the snapshot view, so a repeated or re-ordered question returns exactly the same text.
+
+**Two public questions still score 0, and I left them on purpose:**
+
+- *"Get me the rate for the certificate of accounts"* has no required values in the answer key, so the scorer can't award it points without its optional LLM judge. BankGPT reads back the full certificate rate sheet, which is what the expected answer describes.
+- *"How many employees used Volunteer Time Off last year?"* expects 294, from an April 2024 article about 2023. Every snapshot also contains an April 2025 article saying 256 employees used it in 2024. BankGPT follows its rule that the newest dated statement wins. Special-casing this one question would break that rule everywhere else.
 
 ## conflicts()
 
