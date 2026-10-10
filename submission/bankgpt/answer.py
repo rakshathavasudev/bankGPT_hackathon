@@ -77,6 +77,7 @@ class Answerer:
             if i > 0 and w[0].isupper() and wl not in NOT_NAMES and wl not in MONTHS and not w.isupper():
                 names.update(t for t in tokens(w) if t not in GENERIC)
         url_intent = bool(URL_WORDS & set(re.findall(r"[a-z]+", ql))) or \
+            bool(re.search(r"\bwhere (?:can|do|should) i (?:see|find|view|check|look up)\b[^?]*\b(?:online|rates?)\b", ql)) or \
             bool(re.search(r"\b(join|apply|open|sign up|enroll)\b[^?]*\bonline\b", ql))
         return {
             "q": q, "ql": ql, "toks": toks, "qt": qt, "names": names,
@@ -595,6 +596,32 @@ class Answerer:
         cands.sort(key=lambda c: c[0], reverse=True)
         return cands[0][1], [cands[0][2]], True, None
 
+    def _rates_section(self, qset, view):
+        st = self.s
+        bit = 1 << view
+        anchors = set()
+        for uid in st.post.get("rate", {}):
+            u = st.units[uid]
+            if st.unit_views[uid] & bit:
+                anchors.update(re.findall(r"\((https://www\.dupaco\.com/[^)\s#]+)/?#rates\)", u.raw))
+        if not anchors:
+            return None
+        spec = {t for t in qset if t in st.idf}
+        scored = []
+        for base in anchors:
+            toks = set()
+            for tid, rows in st.table_units.items():
+                if tid.rsplit("#", 1)[0].rstrip("/") == base.rstrip("/"):
+                    for r in rows:
+                        if st.unit_views[r.uid] & bit:
+                            toks.update(st.hay[r.uid])
+            ov = sum(st.idf[t] for t in spec & toks)
+            if ov:
+                scored.append((ov, -len(toks), base))
+        if not scored:
+            return None
+        return max(scored)[2].rstrip("/") + "#rates"
+
     def _url_answer(self, a, groups, view):
         st = self.s
         qset = {t for t in a["qt"] if t not in GENERIC}
@@ -609,6 +636,12 @@ class Answerer:
                     cands[link.split("?")[0]] += ov * g["score"] / 8
         if not cands:
             return REFUSAL, [], False, None
+        if a["rate"] or "rate" in a["toks"]:
+            # "Where do I see X rates?": the product page's own rates section (linked site-wide as page#rates)
+            # beats the catch-all rate sheet.
+            best = self._rates_section(qset, view)
+            if best:
+                cands[best] = max(cands.values()) * 1.5
         ranked = [u.rstrip("/") for u, _ in sorted(cands.items(), key=lambda x: -x[1])]
         picks = []
         for u in ranked:
