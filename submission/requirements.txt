@@ -1,0 +1,5 @@
+# The default (rules-only) mode uses only the Python 3.11 standard library: nothing to install.
+#
+# Optional: the Claude fallback (off unless ANTHROPIC_API_KEY and BANKGPT_USE_CLAUDE=1 are set)
+# needs the Anthropic SDK. Uncomment to install it:
+# anthropic>=0.70

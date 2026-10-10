@@ -19,6 +19,8 @@ from contract import Answer, Conflict, Snapshot, Source  # noqa: E402
 from bankgpt.conflicts import find_conflicts  # noqa: E402
 from bankgpt.answer import Answerer
 from bankgpt.engine import Store  # noqa: E402
+from bankgpt import llm  # noqa: E402
+from bankgpt.text import tokens  # noqa: E402
 
 
 class BankGPT:
@@ -46,8 +48,21 @@ class BankGPT:
                           conflict_note=f"internal error: {type(e).__name__}")
         view = self.store.view_for(self.answerer.today if as_of or self.answerer.today != self.store.snaps[-1][1] else None)
         sid = self.store.snaps[view][0]
+        if not confident and llm.enabled():
+            got = self._ask_claude(question, view)
+            if got:
+                text, url = got
+                return Answer(text=text, sources=[Source(url=url, snapshot_id=sid)], confident=True,
+                              conflict_note="answered by the optional Claude fallback from retrieved passages")
         srcs = [Source(url=u.url, snapshot_id=sid, quote=u.text[:200]) for u in units]
         return Answer(text=text, sources=srcs, confident=confident, conflict_note=note)
+
+    def _ask_claude(self, question, view):
+        q = {t: 1.0 for t in tokens(question)}
+        hits = self.store.search(q, view, limit=12)
+        passages = [(self.store.units[uid].url,
+                     f"{self.store.units[uid].context}: {self.store.units[uid].text}"[:1200]) for _, uid in hits]
+        return llm.ask(question, passages)
 
     def conflicts(self) -> list[Conflict]:
         self._ready()
