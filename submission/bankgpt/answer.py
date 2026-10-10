@@ -30,6 +30,8 @@ for _w in GENERIC_WORDS:
     GENERIC.update(tokens(_w, keep_stop=True))
 NOT_NAMES = {"dupaco", "i", "what", "how", "can", "do", "does", "is", "are", "who", "when", "where", "which",
              "why", "the", "a", "my", "visa", "apr", "apy", "ira", "cd", "cds", "atm", "pm", "am", "usa", "us"}
+BIO = re.compile(r"\b(?:joined|came to|worked at|working for) (?:the )?(?:Dupaco|prominent|firm)|"
+                 r"\b(?:recently )?retired as\b|\bjoined the Dupaco board\b", re.I)
 REFUSAL = ("I don't know. That isn't listed on Dupaco's website, so I can't confirm it. "
            "Please contact Dupaco directly.")
 RATE_NEAR = re.compile(
@@ -114,6 +116,18 @@ class Answerer:
             return t in hay or any(x in hay for syn in SYNONYMS.get(t, []) for x in tokens(syn))
         tot = sum(st.idf[t] for t in spec)
         return sum(st.idf[t] for t in spec if ok(t)) / tot if tot else 1.0
+
+    def _has_rarest(self, a: dict, uid: int) -> bool:
+        """The question's most distinctive word (e.g. 'ticker', 'jumbo') must appear in the passage."""
+        st = self.s
+        spec = [t for t in set(a["toks"]) if t not in GENERIC and not re.fullmatch(r"[\d.]+", t) and t in st.idf]
+        if not 2 <= len(spec) <= 3:      # long conversational questions carry incidental words
+            return True
+        if len(spec) >= 3:      # verbs say little about the topic
+            spec = [t for t in spec if not re.search(r"(ed|ing)$", t)] or spec
+        t = max(spec, key=lambda t: st.idf[t])
+        hay = st.hay[uid]
+        return t in hay or any(x in hay for syn in SYNONYMS.get(t, []) for x in tokens(syn))
 
     def unit_score(self, base: float, u: Unit, info: PageInfo, a: dict) -> float:
         s = base * info.authority
@@ -236,6 +250,11 @@ class Answerer:
                 rng = money_ranges(" ".join(u.cells[:3]))
                 if rng and not any(lo - 0.5 <= m <= hi + 0.5 for m in a["money"] for lo, hi in rng):
                     return False
+        if a["rate"] and a["terms"]:
+            # "7-year certificate": a passage with no matching term is about some other product.
+            ut = terms(" ".join(u.cells) + " " + u.context if u.kind == "row" else t)
+            if not a["terms"] & ut:
+                return False
         if a["rate"]:
             if u.kind == "row":
                 if not any(re.search(r"\d\s?%", c) for c in u.cells):
@@ -267,7 +286,7 @@ class Answerer:
         st = self.s
         missing = [t for t in set(a["toks"]) if t not in GENERIC and not re.fullmatch(r"[\d.]+", t) and t not in st.post]
         missing_names = [n for n in a["names"] if n not in st.post and not any(x in st.post for x in SYNONYMS.get(n, []))]
-        if missing_names or (missing and (a["rate"] or a["kind"] in ("hours", "address"))):
+        if missing_names or missing:
             return REFUSAL, [], False, None
         ranked = self.ranked(a, view)
         if not ranked:
@@ -285,13 +304,21 @@ class Answerer:
                 return res
         top = groups[0]["score"]
         need = 0.6 if (a["rate"] or a["kind"]) else 0.3
+        spec = [t for t in set(a["toks"]) if t not in GENERIC and not re.fullmatch(r"[\d.]+", t) and t in st.idf]
+        if len(spec) == 2:
+            need = 0.99        # short question: both of its topic words must be there
+        yesno = bool(re.match(r"(does|do|is|are|can|will) ", a["ql"]))
         ok = []
         for g in groups[:40]:
             if g["score"] < 0.25 * top:
                 break
             if a["names"] and not self._has_names(a, g["u"].uid):
                 continue
-            if self.coverage(a, g["u"].uid) >= need and self._fits(a, g):
+            if not a["ql"].startswith("who") and BIO.search(g["u"].text):
+                continue        # a person's career history is not a fact about Dupaco's products or places
+            if yesno and re.search(r"[“\"].{20,}[”\"]|\bsays\b", g["u"].text):
+                continue        # someone's quote in a news story doesn't say what Dupaco offers
+            if self.coverage(a, g["u"].uid) >= need and self._has_rarest(a, g["u"].uid) and self._fits(a, g):
                 ok.append(g)
         if not ok:
             return REFUSAL, [], False, None

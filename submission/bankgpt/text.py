@@ -19,7 +19,7 @@ i me my we our us you your it its this that these those what which who whom whos
 can could would should will shall may might must there their they them he she his her as if than then
 so such not no yes any all some each tell please give get know like want need am im id about into don doesn didn isn aren won can
 dupaco dupacos s just much many also more most per via over under above below less than after before
-up out off very too only own other during while until because through again""".split())
+up out off very too only own other during while until because through again has""".split())
 
 # Query-side expansions: word -> extra words that carry the same meaning on the site.
 SYNONYMS = {
