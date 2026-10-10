@@ -22,7 +22,8 @@ GENERIC_WORDS = RATE_WORDS | {
     "lowest", "best", "top", "maximum", "minimum", "max", "min", "going", "new", "become", "use", "used",
     "should", "link", "url", "website", "page", "site", "online", "web", "anything", "something", "there",
     "currently", "latest", "recent", "right", "now", "were", "was", "last", "ago", "options", "flexibility",
-    "flexible", "looking", "want", "would", "like", "know", "explain", "describe", "details", "detail"}
+    "flexible", "looking", "want", "would", "like", "know", "explain", "describe", "details", "detail",
+    "share", "regular", "fixed", "plain", "basic", "normal", "usual", "regularly"} | set(MONTHS)
 GENERIC = set()
 for _w in GENERIC_WORDS:
     GENERIC.update(tokens(_w, keep_stop=True))
@@ -321,10 +322,26 @@ class Answerer:
             return ", ".join(c for c in u.cells if "%" in c)
         return ", ".join(re.findall(r"\d[\d,]*(?:\.\d+)?%?", u.text))[:80]
 
+    def _segment_fits(self, a: dict, seg: str) -> bool:
+        if a["terms"]:
+            st = terms(seg)
+            if st and not a["terms"] & st:
+                return False
+        if a["money"]:
+            rng = money_ranges(seg)
+            if rng and not any(lo - 0.5 <= m <= hi + 0.5 for m in a["money"] for lo, hi in rng):
+                return False
+        if a["years"]:
+            yr = year_ranges(seg)
+            if yr and not any(lo <= y <= hi for y in a["years"] for lo, hi in yr):
+                return False
+        return True
+
     def _sentences(self, a: dict, text: str, budget: int = 360) -> str:
-        if len(text) <= budget:
-            return text
-        sents = re.split(r"(?<=[.!?])\s+(?=[A-Z\"“$0-9-])", text)
+        qualified = a["terms"] or a["money"] or a["years"]
+        if len(text) <= budget and not (qualified and "\n" in text):
+            return text.replace("\n", " ")
+        sents = [x for line in text.split("\n") for x in re.split(r"(?<=[.!?])\s+(?=[A-Z\"\u201c$0-9-])", line) if x.strip()]
         qset = set(a["qt"])
         scored = []
         for i, s in enumerate(sents):
@@ -332,11 +349,13 @@ class Answerer:
             sc = sum(self.s.idf.get(t, 0) * a["qt"][t] for t in ts & qset)
             if a["rate"] and RATE_NEAR.search(s):
                 sc *= 1.5
+            if qualified and not self._segment_fits(a, s):
+                sc *= 0.05
             scored.append((sc, -i, i))
         scored.sort(reverse=True)
         i = scored[0][2]
         pick = [i]
-        if (len(sents[i]) < 230 or sents[i].rstrip().endswith(":")) and i + 1 < len(sents):
+        if not qualified and (len(sents[i]) < 230 or sents[i].rstrip().endswith(":")) and i + 1 < len(sents):
             pick.append(i + 1)
         return " ".join(sents[j] for j in sorted(set(pick)))
 
@@ -344,6 +363,8 @@ class Answerer:
         g0 = groups[0]
         u0 = g0["u"]
         text = self._sentences(a, u0.text)
+        if a["rate"] and not RATE_NEAR.search(text) and not re.search(r"\d\s?%", text):
+            text = self._sentences(dict(a, terms=a["terms"]), u0.text, 0)
         srcs = [u0]
         # Short answers borrow the next strongest passage from the same page (e.g. a program's lead paragraph).
         if len(text) < 220:
@@ -431,7 +452,7 @@ class Answerer:
             return re.sub(r"\s*ABOUT DUPACO.*$", "", t).strip()
         out, srcs = [], []
         for g in ok[:6]:
-            t = trim(self._sentences(a, g["u"].text, 420))
+            t = trim(g["u"].text.replace("\n", " ")[:600] if len(g["u"].text) <= 600 else self._sentences(a, g["u"].text, 420))
             if t not in out:
                 out.append(t)
                 srcs.append(g["u"])

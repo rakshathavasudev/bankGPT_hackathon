@@ -99,7 +99,7 @@ def parse_page(url: str, title: str, md: str, uid0: int) -> tuple[PageInfo, list
     def flush():
         nonlocal block, block_raw, lead
         if block:
-            txt = " ".join(block)
+            txt = "\n".join(block)
             if lead and lead not in txt:
                 txt = lead + " " + txt
             units.append(Unit(uid0 + len(units), url, "text", txt, heading, " ".join(block_raw)))
