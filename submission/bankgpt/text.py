@@ -30,7 +30,9 @@ SYNONYMS = {
     "atm": ["atm"], "locator": ["location", "find"], "hours": ["hour"], "open": ["hour"],
     "join": ["membership", "member"], "member": ["membership"], "eligible": ["eligibility", "membership", "live", "work"],
     "heloc": ["home", "equity", "line"], "visa": ["card"], "cards": ["card"],
-    "student": ["student", "college", "school"], "university": ["college", "student"],
+    "student": ["student", "college", "school"],
+    "illinois": ["il"], "iowa": ["ia"], "wisconsin": ["wi", "wis"], "il": ["illinois"], "ia": ["iowa"],
+    "wi": ["wisconsin"], "university": ["college", "student"],
     "wallet": ["pay", "apple", "google", "samsung"],
 }
 
@@ -54,6 +56,8 @@ def strip_md(s: str) -> str:
 
 
 def _stem(w: str) -> str:
+    if len(w) > 5 and w.endswith(("ches", "shes", "sses", "xes", "zes")):
+        return w[:-2]
     if len(w) > 4 and w.endswith("ies"):
         return w[:-3] + "y"
     if len(w) > 3 and w.endswith("s") and not w.endswith("ss") and not w.endswith("us"):
@@ -108,6 +112,11 @@ def terms(s: str) -> set[tuple[int, str]]:
         n = int(n) if n.isdigit() else WORDNUM[n.lower()]
         unit = "month" if unit.lower().startswith("mo") else "year"
         out.add((n, unit))
+        # "5-year auto loan" == "60 Months"; "36 months" == "3-year".
+        if unit == "year" and n <= 10:
+            out.add((n * 12, "month"))
+        if unit == "month" and n >= 12 and n % 12 == 0:
+            out.add((n // 12, "year"))
     return out
 
 
@@ -160,3 +169,7 @@ def mask_numbers(s: str) -> str:
     for w in ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"):
         s = re.sub(rf"\b{w}\b", "#", s)
     return re.sub(r"\W+", " ", s).strip()
+
+
+# Synonym keys are matched against stemmed tokens ("illinois" -> "illinoi").
+SYNONYMS = {(tokens(k) or [k])[0]: v for k, v in SYNONYMS.items()}

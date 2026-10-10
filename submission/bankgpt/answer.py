@@ -23,6 +23,7 @@ GENERIC_WORDS = RATE_WORDS | {
     "should", "link", "url", "website", "page", "site", "online", "web", "anything", "something", "there",
     "currently", "latest", "recent", "right", "now", "were", "was", "last", "ago", "options", "flexibility",
     "flexible", "looking", "want", "would", "like", "know", "explain", "describe", "details", "detail",
+    "address", "street", "location", "located", "where", "hours", "hour", "phone", "telephone", "routing",
     "share", "regular", "fixed", "plain", "basic", "normal", "usual", "regularly"} | set(MONTHS)
 GENERIC = set()
 for _w in GENERIC_WORDS:
@@ -87,8 +88,8 @@ class Answerer:
                 and not re.search(r"\b(fee|charge|cost|bill|loan)\b", ql)),
             "intro": bool(re.search(r"\b(intro|introductory|promo|promotional|balance transfer|transfer)\b", ql)),
             "url": url_intent,
-            "list": bool(re.search(r"\b(rates|all|list|which|what (?:credit )?(?:cards|loans|accounts|certificates)|"
-                                   r"do you (?:offer|have)|options|right now|current\b.*\brates)\b", ql)),
+            "list": bool(re.search(r"\b(rates|aprs|apys|yields|all|list|which|cards|loans|accounts|certificates|cds|"
+                                   r"do you (?:offer|have)|options|right now)\b", ql)),
             "super": ("max" if re.search(r"\b(highest|best|top|maximum|most)\b", ql) else
                       "min" if re.search(r"\b(lowest|minimum|cheapest|least)\b", ql) else ""),
             "business": "business" in ql, "jumbo": "jumbo" in ql,
@@ -98,7 +99,7 @@ class Answerer:
                      "phone" if re.search(r"\b(phone|telephone|call you|call dupaco|number to call)\b", ql) else
                      "hours" if re.search(r"\bhours?\b|\bopen (?:on|until|at)\b|\bwhat time\b", ql) else
                      "address" if re.search(r"\baddress\b|\bwhere is\b|\blocated\b", ql) and not url_intent else
-                     "count" if re.search(r"\bhow many\b", ql) else
+                     "count" if re.search(r"\bhow many\b|^(?:what is the |what's the )?(?:total )?number of\b", ql) else
                      "date" if re.search(r"^when\b|\bwhat date\b|\bwhen (?:does|did|will|is|was)\b", ql) else ""),
         }
 
@@ -156,9 +157,15 @@ class Answerer:
             s *= 0.8
         cov = self.coverage(a, u.uid)
         s *= 0.3 + 0.7 * cov
-        if a["names"] and not all(n in self.s.hay[u.uid] for n in a["names"]):
+        if a["names"] and not self._has_names(a, u.uid):
             s *= 0.1
+        if a["kind"] == "address" and re.search(r"\b(dupaco|branch)\b", tl):
+            s *= 2.5
         return s
+
+    def _has_names(self, a, uid):
+        hay = self.s.hay[uid]
+        return all(n in hay or any(x in hay for x in SYNONYMS.get(n, [])) for n in a["names"])
 
     # ------------------------------------------------------------- main entry
     def answer(self, question: str, as_of: str | None = None):
@@ -259,7 +266,7 @@ class Answerer:
     def _answer(self, a: dict, view: int):
         st = self.s
         missing = [t for t in set(a["toks"]) if t not in GENERIC and not re.fullmatch(r"[\d.]+", t) and t not in st.post]
-        missing_names = [n for n in a["names"] if n not in st.post]
+        missing_names = [n for n in a["names"] if n not in st.post and not any(x in st.post for x in SYNONYMS.get(n, []))]
         if missing_names or (missing and (a["rate"] or a["kind"] in ("hours", "address"))):
             return REFUSAL, [], False, None
         ranked = self.ranked(a, view)
@@ -282,7 +289,7 @@ class Answerer:
         for g in groups[:40]:
             if g["score"] < 0.25 * top:
                 break
-            if a["names"] and not all(n in st.hay[g["u"].uid] for n in a["names"]):
+            if a["names"] and not self._has_names(a, g["u"].uid):
                 continue
             if self.coverage(a, g["u"].uid) >= need and self._fits(a, g):
                 ok.append(g)
