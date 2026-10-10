@@ -193,8 +193,55 @@ class Answerer:
         if key in self.cache:
             return self.cache[key]
         res = self._answer(a, view)
+        if res[2]:
+            res = (res[0], self._more_sources(res[0], res[1], view, a), res[2], res[3])
         self.cache[key] = res
         return res
+
+    def _more_sources(self, text, units, view, a):
+        """Cite the other official pages that carry the same fact (same table row, same routing number)."""
+        st = self.s
+        bit = 1 << view
+        urls = [u.url.rstrip("/") for u in units]
+        extra = []
+
+        def add(uid):
+            u = st.units[uid]
+            if st.unit_views[uid] & bit and u.url.rstrip("/") not in urls and st.info(uid, view).kind == "official":
+                urls.append(u.url.rstrip("/"))
+                extra.append(u)
+        for u in units:
+            if u.kind == "row" and u.cells:
+                for uid in st.rows_by_cells.get(tuple(u.cells), []):
+                    add(uid)
+        if a["kind"] in ("routing", "phone"):
+            for val in re.findall(r"\b\d{9}\b|\b\d{3}-\d{3}-\d{4}\b", text):
+                tok = (tokens(val) or [val])[0]
+                for uid in list(st.post.get(tok, {}))[:400]:
+                    add(uid)
+        if a["kind"] == "hours" and not a["names"]:
+            for uid, u in enumerate(st.units):
+                if u.url.rstrip("/").endswith("dupaco.com/contact") and re.search(r"\d\s?a\.?m", u.text):
+                    add(uid)
+                    break
+        return list(units) + extra[:6]
+
+    def main_phone(self, view):
+        """The number the site repeats most is the main line; returns (number, unit)."""
+        st = self.s
+        bit = 1 << view
+        freq, where = {}, {}
+        for uid, u in enumerate(st.units):
+            if not st.unit_views[uid] & bit or u.kind != "text":
+                continue
+            for m in re.findall(r"\b\d{3}-\d{3}-\d{4}\b", u.text):
+                freq[m] = freq.get(m, 0) + 1
+                if m not in where or "contact" in u.url:
+                    where[m] = u
+        if not freq:
+            return None, None
+        num = max(freq, key=freq.get)
+        return num, where[num]
 
     def ranked(self, a: dict, view: int):
         out = []

@@ -95,9 +95,11 @@ class Store:
         self.hay = [set(tokens(u.text + " " + u.context + " " + self.titles.get(u.url, "") + " "
                               + re.sub(r"[/_\-.#?=]", " ", u.url))) for u in self.units]
         self.table_units = defaultdict(list)
+        self.rows_by_cells = defaultdict(list)       # identical rows on different pages
         for u in self.units:
             if u.kind == "row":
                 self.table_units[u.table].append(u)
+                self.rows_by_cells[tuple(u.cells)].append(u.uid)
         self.N = len(self.units)
         self.avgdl = sum(self.dl) / max(1, self.N)
         self.idf = {t: math.log(1 + (self.N - len(p) + 0.5) / (len(p) + 0.5)) for t, p in self.post.items()}
