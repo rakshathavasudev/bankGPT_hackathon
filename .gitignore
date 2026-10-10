@@ -1,0 +1,7 @@
+snapshots/0*/
+__pycache__/
+*.pyc
+results/
+.env
+snapshots_zip/
+Knowledge-Hackathon-Assignment.pdf
