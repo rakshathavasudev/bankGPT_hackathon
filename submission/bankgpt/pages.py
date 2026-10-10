@@ -70,6 +70,11 @@ def _split_row(line: str) -> list[str]:
     return [clean(strip_md(c)) for c in line.strip().strip("|").split("|")]
 
 
+def nxt_is_table(lines, i):
+    nxt = next((l.strip() for l in lines[i + 1:i + 16] if l.strip()), "")
+    return nxt.startswith("|")
+
+
 def parse_page(url: str, title: str, md: str, uid0: int) -> tuple[PageInfo, list[Unit]]:
     kind = page_kind(url)
     lines = md.split("\n")
@@ -85,7 +90,7 @@ def parse_page(url: str, title: str, md: str, uid0: int) -> tuple[PageInfo, list
     info = PageInfo(url, title, AUTHORITY[kind], published, max(eff) if eff else None, kind)
 
     units: list[Unit] = []
-    heading, caption = title, ""
+    heading, caption, section = title, "", ""
     i, n_tables = 0, 0
     block: list[str] = []
     block_raw: list[str] = []
@@ -113,7 +118,7 @@ def parse_page(url: str, title: str, md: str, uid0: int) -> tuple[PageInfo, list
                 j += 1
             n_tables += 1
             tid = f"{url}#t{n_tables}"
-            ctx = " - ".join(x for x in (heading, caption) if x)
+            ctx = " - ".join(dict.fromkeys(x for x in (heading, section, caption) if x))
             labels = []
             for r_i, cells in enumerate(rows):
                 if not any(cells):
@@ -138,7 +143,7 @@ def parse_page(url: str, title: str, md: str, uid0: int) -> tuple[PageInfo, list
         if s.startswith("#"):
             flush()
             heading = clean(strip_md(s))
-            caption = ""
+            caption = section = ""
             i += 1
             continue
         plain = clean(strip_md(s))
@@ -146,8 +151,11 @@ def parse_page(url: str, title: str, md: str, uid0: int) -> tuple[PageInfo, list
             i += 1
             continue
         short = len(plain) < 60 and not plain.endswith((".", ":", "!", "?")) and not re.search(r"\d", plain)
-        nxt = next((l.strip() for l in lines[i + 1:i + 4] if l.strip()), "")
-        if short and nxt.startswith("|"):
+        label = plain.lstrip("-• ").strip()
+        if short and ":" not in label and (s.startswith(("- [", "* [", "**")) or len(label.split()) <= 6) \
+                and not nxt_is_table(lines, i):
+            section = label
+        if short and nxt_is_table(lines, i):
             flush()
             caption = plain          # table caption like "Share Savings"
             i += 1

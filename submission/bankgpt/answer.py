@@ -80,7 +80,11 @@ class Answerer:
             "years": [int(y) for y in re.findall(r"\b((?:19|20)\d{2})\b", q)
                       if re.search(r"model|vehicle|car\b|auto|truck|motorcycle", ql)],
             "money": money_values(q),
-            "rate": bool(RATE_WORDS & set(tokens(q, keep_stop=True))),
+            "rate": bool(RATE_WORDS & set(tokens(q, keep_stop=True))) or bool(
+                re.search(r"\b(pay|pays|paying|earn|earns|return)\b", ql) and re.search(
+                    r"\b(savings?|certificates?|cds?|checking|money market|ira|account|club)\b", ql)
+                and not re.search(r"\b(fee|charge|cost|bill|loan)\b", ql)),
+            "intro": bool(re.search(r"\b(intro|introductory|promo|promotional|balance transfer|transfer)\b", ql)),
             "url": url_intent,
             "list": bool(re.search(r"\b(rates|all|list|which|what (?:credit )?(?:cards|loans|accounts|certificates)|"
                                    r"do you (?:offer|have)|options|right now|current\b.*\brates)\b", ql)),
@@ -90,6 +94,7 @@ class Answerer:
             "ira": bool(re.search(r"\b(ira|iras|roth|traditional|retirement)\b", ql)),
             "refi": bool(re.search(r"refinanc", ql)),
             "kind": ("routing" if "routing" in ql else
+                     "phone" if re.search(r"\b(phone|telephone|call you|call dupaco|number to call)\b", ql) else
                      "hours" if re.search(r"\bhours?\b|\bopen (?:on|until|at)\b|\bwhat time\b", ql) else
                      "address" if re.search(r"\baddress\b|\bwhere is\b|\blocated\b", ql) and not url_intent else
                      "count" if re.search(r"\bhow many\b", ql) else
@@ -208,6 +213,21 @@ class Answerer:
     def _fits(self, a: dict, g: dict) -> bool:
         u = g["u"]
         t = u.text
+        if u.kind == "row":
+            # A row for a different term / model year / balance is not an answer, it is a trap.
+            cells = " ".join(u.cells)
+            if a["terms"]:
+                ut = terms(cells + " " + u.context)
+                if ut and not a["terms"] & ut:
+                    return False
+            if a["years"]:
+                yr = year_ranges(cells)
+                if yr and not any(lo <= y <= hi for y in a["years"] for lo, hi in yr):
+                    return False
+            if a["money"]:
+                rng = money_ranges(" ".join(u.cells[:3]))
+                if rng and not any(lo - 0.5 <= m <= hi + 0.5 for m in a["money"] for lo, hi in rng):
+                    return False
         if a["rate"]:
             if u.kind == "row":
                 if not any(re.search(r"\d\s?%", c) for c in u.cells):
@@ -229,6 +249,8 @@ class Answerer:
             return bool(re.search(r"\d", t))
         if k == "date":
             return bool(re.search(r"(19|20)\d{2}|\d{1,2}/\d{1,2}", t))
+        if k == "phone":
+            return bool(re.search(r"\(?\d{3}\)?[ -.]\d{3}-\d{4}", t))
         if k == "routing":
             return bool(re.search(r"\b\d{9}\b", t))
         return True
@@ -249,6 +271,10 @@ class Answerer:
                 return res
         if a["url"]:
             return self._url_answer(a, groups, view)
+        if a["kind"] == "phone":
+            res = self._phone_answer(a, view)
+            if res:
+                return res
         top = groups[0]["score"]
         need = 0.6 if (a["rate"] or a["kind"]) else 0.3
         ok = []
@@ -357,6 +383,9 @@ class Answerer:
             chosen = [g["u"] for g in groups if g["u"].kind == "row" and g["u"].table == u0.table
                       and g["score"] >= 0.8 * g0["score"]][:6] or [u0]
             chosen = sorted(chosen, key=lambda u: u.row_idx)
+        if not a["intro"]:
+            kept = [u for u in chosen if not re.search(r"\b(intro|introductory|promo)", " ".join(u.cells[:1]), re.I)]
+            chosen = kept or chosen
         # Amount tiers read best smallest first ("$100,000 or less" before "$832,750 or less").
         if all(money_ranges(" ".join(u.cells[:2])) for u in chosen) and len(chosen) > 1:
             chosen = sorted(chosen, key=lambda u: (u.cells[0].split(" ")[0:2], money_ranges(" ".join(u.cells[:2]))[0][1]))
@@ -370,7 +399,8 @@ class Answerer:
                         and g["info"].authority >= g0["info"].authority:
                     seen.add(u.table)
                     cap = u.text.split(":", 1)[0]
-                    lines += [cap + ": " + self._fmt_row(x, a) for x in self._table_rows(u.table, view)[:8]]
+                    lines += [cap + ": " + self._fmt_row(x, a) for x in self._table_rows(u.table, view)[:8]
+                              if a["intro"] or not re.search(r"\b(intro|introductory|promo)", " ".join(x.cells[:1]), re.I)]
                     srcs.append(u)
                     if len(seen) >= 4:
                         break
@@ -409,6 +439,26 @@ class Answerer:
                 break
         text = out[0] if len(out) == 1 else "Hours vary by branch. For example: " + " | Another branch: ".join(out)
         return text, srcs, True, None
+
+    def _phone_answer(self, a, view):
+        """General 'what's your number' questions: the number the site repeats most is the main line."""
+        st = self.s
+        spec = {t for t in a["toks"] if t not in GENERIC} - {"phone", "number", "call", "contact", "telephone", "reach"}
+        if spec:
+            return None
+        bit = 1 << view
+        freq, where = {}, {}
+        for uid, u in enumerate(st.units):
+            if not st.unit_views[uid] & bit or u.kind != "text":
+                continue
+            for m in re.findall(r"\b\d{3}-\d{3}-\d{4}\b", u.text):
+                freq[m] = freq.get(m, 0) + 1
+                if m not in where or "contact" in u.url:
+                    where[m] = u
+        if not freq:
+            return None
+        num = max(freq, key=freq.get)
+        return f"You can reach Dupaco at {num}.", [where[num]], True, None
 
     def _count_answer(self, a, groups, view):
         """'How many X': find '<number> ... X' statements about Dupaco itself; trust the newest dated one."""

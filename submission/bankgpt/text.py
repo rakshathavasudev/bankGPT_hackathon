@@ -18,7 +18,8 @@ STOP = set("""a an the and or of to in on for at by with from is are was were be
 i me my we our us you your it its this that these those what which who whom whose when where why how
 can could would should will shall may might must there their they them he she his her as if than then
 so such not no yes any all some each tell please give get know like want need am im id about into don doesn didn isn aren won can
-dupaco dupacos s just much many also more most per via""".split())
+dupaco dupacos s just much many also more most per via over under above below less than after before
+up out off very too only own other during while until because through again""".split())
 
 # Query-side expansions: word -> extra words that carry the same meaning on the site.
 SYNONYMS = {
@@ -115,8 +116,7 @@ def year_ranges(s: str) -> list[tuple[int, int]]:
     for a, b in YEAR_RANGE.findall(s or ""):
         a = int(a)
         b = int(b) if len(b) == 4 else (a // 100) * 100 + int(b)
-        if b >= a:
-            out.append((a, b))
+        out.append((min(a, b), max(a, b)))
     return out
 
 
