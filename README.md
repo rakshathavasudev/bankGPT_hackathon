@@ -1,85 +1,99 @@
-# Hackathon: Build a Knowledge System That Knows What's True *Now*
+# BankGPT: a credit-union assistant that knows what's true *now*
 
-## The problem in one minute
+My entry for the Knowledge Hackathon. BankGPT answers member questions about Dupaco Credit Union, such as "What's the 12-month certificate rate?", "What are the drive-up hours?" or "Who can join?", using only five crawls of the credit union's website taken between May and September 2026.
 
-Our assistant answers credit-union members' questions ("What's the 6-month certificate rate?", "How much is a lost debit card?") using the credit union's own website.
+## The problem I was solving
 
-We download (crawl) that website again and again over time. Each download is a **snapshot**. Websites are messy:
+The website contradicts itself, and the contradictions get worse over time:
 
-- A rate changes, but an old page or PDF still shows the old number.
-- A promotion ends, but its page is never taken down.
-- One page lists the **rate**, another the **APY**, and they look like they disagree.
-- A table has tiers (by balance, by term). Read it carelessly and every tier looks like a conflict.
-- Old newsletters and press releases describe offers from years ago.
+- A rate changes on the official rate sheet, but a calculator, PDF or old campaign page still shows the old number.
+- Promotions end, but their pages stay up.
+- Tables have tiers by term, balance, loan amount and vehicle model year. Read carelessly, every tier looks like a conflict.
+- Press releases and blog posts describe offers and facts from years ago.
 
-When we combined these snapshots, our system **gave members wrong or out-of-date answers**. Every eval question in this kit comes from a real problem like that.
+A plain search-and-answer bot repeats whichever stale number it finds first. My goal was a system that gives:
 
-**Your mission:** build a system that reads the snapshots in date order and answers questions the way a careful human expert would: with the **current** value, the **right** tier, a **source**, and an honest "I don't know" when the site doesn't say.
+- the **current** value;
+- the **right tier**;
+- a **source**;
+- an honest "I don't know" when the site doesn't say.
 
-## What's in the box
+## How I approached it
 
-```
-snapshots_zip/           the five website downloads, one zip per date (oldest first)
-snapshots/README.md      what each download is and what changed between them
-eval/public_eval.jsonl   40 practice questions with expected answers
-starter/solution.py      a working (but naive) solution to copy from
-harness/                 the scorer we will use (same one you can run)
-```
+I built a rules-based engine. It has no required LLM and makes no network calls, so it's fast, deterministic and free to run.
 
-**You don't need to unzip anything.** The first time you run the scorer (below), it unpacks the zips into `snapshots/`, with one folder per download, each holding a `manifest.json` (url, title, date) and the pages as `pages/*.md`. After that the folders are there to browse. If you'd rather look first, unzip them yourself into `snapshots/`; the scorer leaves existing folders alone.
+1. **Keep history, not just the latest copy.** Every page version is stored with the snapshots it appeared in. A question is answered from the site as it stood on a date: the newest crawl by default, or an older one for "as of" questions.
+2. **Break pages into facts.** Each table row becomes a fact that keeps its caption and section, so "$0-$999.99: 0.05%" stays attached to "Share Savings". Text is split into short passages, and everything is indexed with BM25.
+3. **Decide which source wins.** Official product pages and the rate sheet outrank:
+   - PDFs;
+   - application pages;
+   - newsroom and blog posts;
+   - campaign landing pages;
+   - calculators, which are where stale rates hide most.
 
-## What you must hand in
+   Older dated news loses weight as it ages.
+4. **Respect qualifiers.** These are treated as different facts, not conflicts:
+   - term, so "5-year" matches "60 months";
+   - model year;
+   - balance tier;
+   - business vs personal, IRA, jumbo and refinance;
+   - promo vs ongoing.
 
-A folder with a file called `solution.py`, containing a `build()` function that returns an object with **three methods**:
+   A row for the wrong term or tier is rejected outright instead of offered as a near miss.
+5. **Be honest.** If the question's key words aren't in the best passage, or the passage isn't the right kind of fact, it says "I don't know" and quotes no numbers.
+6. **List contradictions.** `conflicts()` reports, each with a winner and a reason:
+   - rates that differ between pages;
+   - rates that changed over time;
+   - "Dupaco has N branches"-style facts that disagree across pages.
 
-| Method | What it does |
+There is also an optional Claude fallback for questions the rules can't answer. It's off unless an API key is set. The full write-up, including every rule for deciding what is current, is in [`submission/NOTES.md`](submission/NOTES.md).
+
+## Results
+
+| What | Result |
 |---|---|
-| `ingest(snapshot)` | We call it once per snapshot, oldest first. Learn from it. |
-| `answer(question, as_of=None)` | Answer a member's question. Without `as_of`, answer from the newest snapshot. With a date, answer as the website stood on that day. |
-| `conflicts()` | List every place where the website contradicts itself, which value you believe is right, and why. |
+| Public practice set (40 questions, official scorer) | 0.946 (every category 1.0 except two items, explained in NOTES.md) |
+| My reworded-question set (45) | 1.0 |
+| My extra question set (40) | 0.975 |
+| My "site doesn't say" set (16) | 0.875 |
+| Answer speed (p95) | about 0.06 s |
+| Loading all five crawls | about 25 s |
 
-The exact shapes are defined in `harness/contract.py`; `starter/solution.py` already follows them. **Don't rename anything.** We plug your folder straight into our scorer.
+## Run it yourself
 
-You can use any tools you like inside: search, embeddings, a graph, an LLM, plain rules. Add a `requirements.txt` if you need packages, and say in a short `NOTES.md` which API keys (if any) you need.
-
-## How to check your work
-
-From the top folder of this kit, run:
+You need Python 3.9+ (I tested on 3.11). Nothing needs installing, and no API keys are needed.
 
 ```bash
-python harness/run_eval.py --submission starter --eval eval/public_eval.jsonl
+git clone https://github.com/rakshathavasudev/bankGPT_hackathon.git
+cd bankGPT_hackathon
+# Copy the hackathon kit's snapshots_zip/ folder in here. The crawl data isn't committed,
+# because it is the credit union's website.
+python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl
 ```
 
-The first run takes a few extra seconds while it unpacks the snapshots. Then it loads all five downloads into the starter, asks the 40 practice questions, and prints your score. To test your own solution, point `--submission` at your folder.
+The first run unpacks the crawls into `snapshots/`. Per-question results go to `results/`.
 
-The starter scores low on purpose. Watch your score go up as you improve. Needs Python 3.9 or newer.
+Other checks:
 
-## How you will be scored
+```bash
+# My own question sets
+python harness/run_eval.py --submission submission --eval submission/dev/para_eval.jsonl
+python harness/run_eval.py --submission submission --eval submission/dev/refuse_eval.jsonl
 
-We run a **larger, hidden question set** with the same format and the same scorer. Four things count:
+# conflicts() on the kit's small synthetic test site
+python harness/run_eval.py --submission submission --snapshots harness/selftest/snapshots \
+  --eval harness/selftest/eval.jsonl --conflicts-gold harness/selftest/conflicts_gold.json
+```
 
-| | Weight | What we look for |
-|---|---|---|
-| **Accuracy** | 55% | The current, correctly-tiered value is in your answer. Repeating an old or wrong value scores **zero** for that question, even if the right value is also there, so hedging by listing every number doesn't pay. Citing the right page earns a little extra. When the site doesn't say, the right answer is "I don't know". |
-| **Conflicts** | 15% | How many real contradictions you list in `conflicts()`, and whether you picked the right winner. |
-| **Consistency** | 15% | The same question asked in different words gets the same answer, and asking twice gives the same answer. |
-| **Speed** | 15% | How quickly you answer. Most answers in 2 seconds or less earns full marks; it drops to zero at 20 seconds. |
+## What's in the repo
 
-Speed and consistency are **multiplied by your accuracy**: a fast or consistent system that's wrong doesn't earn those points. Ingest (loading the snapshots) isn't timed for scoring, but must finish within 30 minutes.
-
-Hidden questions include re-worded versions of the public ones, "as of" date questions, and questions about things that *changed* between snapshots.
-
-## A simple way to approach it
-
-1. **Read the snapshots yourself first.** (Run the scorer once to unpack them, or unzip `snapshots_zip/`.) Pick five topics (a rate, a fee, branch hours) and follow them across the dates. You'll quickly see the kinds of mess.
-2. **Keep history, not just the latest copy.** Remember *when* you saw each fact and *where*.
-3. **Decide what "current" means.** Is the newer page right? Does an official rate sheet beat a blog post? What about an expired promotion? Write your rules down.
-4. **Respect qualifiers.** "6-month" vs "12-month", "rate" vs "APY", "Prime Checking" vs "Prime Business Checking". These are different facts, not conflicts.
-5. **Be honest.** If the website doesn't say, don't guess.
-6. **Run the public eval often.** Read the questions you miss, not just the score.
-
-## Rules
-
-- Use only the snapshots provided to answer questions. No live website calls.
-- Each `answer` call must finish within 60 seconds.
-- The data is a real credit union's public website, shared for this event only. Don't redistribute it.
+```
+submission/            my solution
+  solution.py          build() -> BankGPT with ingest / answer / conflicts
+  bankgpt/             page parsing, versioned store, ranking rules, conflicts, optional Claude fallback
+  dev/                 question sets I wrote to test rewordings, refusals and edge cases
+  NOTES.md             approach, how "current" is decided, how to run, API keys
+  requirements.txt     empty for the default mode (standard library only)
+harness/, eval/        the hackathon's scorer and public practice questions
+starter/               the hackathon's naive baseline, kept for comparison
+```
