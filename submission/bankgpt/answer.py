@@ -531,13 +531,17 @@ class Answerer:
             m = re.search(r"(branch hours|hours (?:are|:)|lobby|drive[- ]up)", t, re.I)
             t = t[m.start():] if m and m.start() < len(t) - 40 else t
             return re.sub(r"\s*ABOUT DUPACO.*$", "", t).strip()
-        out, srcs = [], []
-        for g in ok[:6]:
+        out, srcs, sigs = [], [], set()
+        for g in ok[:10]:
+            sig = " ".join(re.findall(r"\d{1,2}(?::\d\d)?\s?[ap]\.?m|noon", g["u"].text.lower()))
+            if sig in sigs:
+                continue        # same schedule worded differently on another page
+            sigs.add(sig)
             t = trim(g["u"].text.replace("\n", " ")[:600] if len(g["u"].text) <= 600 else self._sentences(a, g["u"].text, 420))
             if t not in out:
                 out.append(t)
                 srcs.append(g["u"])
-            if len(out) == (1 if a["names"] else 2):
+            if len(out) == (1 if a["names"] else 3):
                 break
         text = out[0] if len(out) == 1 else "Hours vary by branch. For example: " + " | Another branch: ".join(out)
         return text, srcs, True, None
